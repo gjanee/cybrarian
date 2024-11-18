@@ -1,0 +1,205 @@
+---
+title: "Public Computing Statistics"
+format:
+  html:
+    theme: cosmo
+    df-print: kable
+---
+
+Script to read an Excel spreadsheet produced by Cybrarian and do some analysis.  **Limitation:** dates of exam week are hard-coded below.
+
+```{r message=FALSE}
+library(tidyverse)
+library(readxl)
+
+exam_week_start <- date("2024-06-08")
+exam_week_end <- date("2024-06-14")
+
+in_exam_week <- function(date) {
+  between(date, exam_week_start, exam_week_end)
+}
+```
+
+## Load data
+
+Expected columns and sample values:
+
+Item | Date | Login Time | Computer | User ID | User Name | Session Minutes
+---- | ---- | ---------- | -------- | ------- | --------- | ---------------
+1 | Monday April 1, 2024 | 7:57:09 AM | PC209-A1HG | warren390 | warren390 | 2
+
+```{r warning=FALSE, message=FALSE}
+# Eliminate first 6 and last 5 rows
+data <- read_xlsx("data/input.xlsx", skip=6)
+data <- read_xlsx("data/input.xlsx", skip=6, n_max=nrow(data)-5)
+
+# Insert the date column into the time column to form a unified
+# timestamp column
+date(data$`Login Time`) <- mdy(str_remove(data$Date, "^\\w+ "))
+
+# Add date back as separate column
+data <- mutate(data, date=date(`Login Time`))
+
+# Select and rename columns of interest
+data <- select(data,
+  login_time=`Login Time`,
+  date,
+  computer=Computer,
+  session_minutes=`Session Minutes`
+)
+
+# The next processing follows the instructions given in:
+# https://ucsb-atlas.atlassian.net/wiki/spaces/LIB/pages/17314414653/Public+Computing+Annual+Statistics
+
+# Remove virtual machines
+data <- filter(data, !str_starts(computer, "PSY|PT|SYS"))
+
+# Map computers to buildings and floors
+data <- mutate(data,
+  building=case_when(
+    str_starts(computer, "OAM"     ) ~ "Music",
+    str_starts(computer, "OA[^M]"  ) ~ "B",
+    str_starts(computer, "PA"      ) ~ "A",
+    str_starts(computer, "PB"      ) ~ "B",
+    str_starts(computer, "PC[124]" ) ~ "D",
+    str_starts(computer, "PC[5678]") ~ "C",
+    str_starts(computer, "PFM"     ) ~ "Music",
+    str_starts(computer, "PF[^M]"  ) ~ "A",
+    str_starts(computer, "PM"      ) ~ "Music",
+    str_starts(computer, "PS2"     ) ~ "C",
+    str_starts(computer, "PS3"     ) ~ "SRC",
+    str_starts(computer, "PW"      ) ~ "A",
+    str_starts(computer, "RSV"     ) ~ "B",
+    TRUE ~ NA
+  ),
+  floor=case_when(
+    str_starts(computer, "OAM|PFM|PM") ~ 2,
+    str_starts(computer, "RSV") ~ 1,
+    str_starts(computer, "^[A-Z]+\\d\\d\\d-") ~
+      as.integer(sub("^[A-Z]+(\\d).*", "\\1", computer)),
+    TRUE ~ NA
+  )
+)
+
+# For convenience, create a dataframe that counts numbers of
+# logins/sessions
+login_data <- data %>%
+  group_by(date, building) %>%
+  summarize(num_logins=n())
+```
+
+## Analysis
+
+### Average users per day
+
+We're equating users with logins here and below.
+
+```{r}
+df <- login_data %>% group_by(date) %>% summarize(num_logins=sum(num_logins))
+round(mean(df$num_logins), 0)
+```
+
+### Average users per day, by area
+
+```{r message=FALSE}
+login_data %>%
+  group_by(building) %>%
+  summarize(`average daily users`=round(mean(num_logins), 0))
+```
+
+### Average session duration
+
+In minutes.
+
+```{r}
+round(mean(data$session_minutes), 0)
+```
+
+### Exam week: average users per day
+
+Comparing usage during exam week and not.
+
+```{r message=FALSE}
+login_data %>%
+  group_by(date) %>%
+  summarize(num_logins=sum(num_logins)) %>%
+  group_by(`exam week`=in_exam_week(date)) %>%
+  summarize(`average daily users`=round(mean(num_logins), 0))
+```
+
+### Exam week: average users per day, by area
+
+```{r message=FALSE}
+login_data %>%
+  group_by(`exam week`=in_exam_week(date), building) %>%
+  summarize(`average daily users`=mean(num_logins)) %>%
+  ggplot(aes(x=building, y=`average daily users`, fill=`exam week`)) +
+    geom_bar(stat="identity", position="dodge")
+```
+
+### Exam week: average session duration
+
+```{r}
+data %>%
+  group_by(`exam week`=in_exam_week(date)) %>%
+  summarize(`average session duration (min)`=round(mean(session_minutes), 0))
+```
+
+### Computer usage
+
+Cybrarian provides the start and end times of each session.  Armed with this data, we can compute how many computers are in **simultaneous** use.  The analysis below groups computers by area, but does not otherwise distinguish computers or sessions.  First, prep the data...
+
+```{r}
+# The loop below takes a looong time, hence the cache file.  While
+# there are more efficient algorithmic approaches, it's surprising
+# that R is so slow...
+
+cache_file <- "data/in_use_data.RData"
+
+if (file.exists(cache_file)) {
+  load(cache_file)
+} else {
+
+  # Create a dataframe with a row for each minute and each building.
+  # Subtle point: we are not capturing the decay in usage that extends
+  # beyond the minute of the last login time.
+  earliest_mins <- as.integer(min(data$login_time)) %/% 60
+  latest_mins <- as.integer(max(data$login_time)) %/% 60
+  in_use_data <- crossing(
+    timestamp=as_datetime((earliest_mins:latest_mins)*60),
+    building=unique(data$building)
+  )
+  in_use_data$num_in_use <- 0
+
+  for (i in rownames(data)) { # For each session
+    start <- data[i,]$login_time
+    second(start) <- 0
+    end <- start + minutes(data[i,]$session_minutes-1)
+    rows <- between(in_use_data$timestamp, start, end) &
+      in_use_data$building == data[i,]$building
+    in_use_data[rows,"num_in_use"] <- in_use_data[rows,"num_in_use"] + 1
+  }
+
+  save(in_use_data, file=cache_file)
+
+}
+```
+
+### Computer usage: overall maximum
+
+Again, this is counting computers that are in simultaneous use.
+
+```{r}
+in_use_data %>%
+  group_by(building) %>%
+  summarize(`max computers in use`=max(num_in_use))
+```
+
+### Computer usage: daily maximums
+
+```{r message=FALSE}
+in_use_data %>%
+  group_by(building, date=date(timestamp)) %>%
+  summarize(`max computers in use`=max(num_in_use)) %>%
+  ggplot(aes(x=date, y=`max computers in use`, color=building)) + geom_line()
+```
