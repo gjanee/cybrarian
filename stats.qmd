@@ -4,6 +4,8 @@ format:
   html:
     theme: cosmo
     df-print: kable
+    toc: true
+    toc-expand: true
 ---
 
 Script to read an Excel spreadsheet produced by Cybrarian and do some analysis.  **Limitation:** dates of exam week are hard-coded below.
@@ -15,12 +17,12 @@ library(readxl)
 exam_week_start <- date("2024-06-08")
 exam_week_end <- date("2024-06-14")
 
-in_exam_week <- function(date) {
-  between(date, exam_week_start, exam_week_end)
+in_exam_week <- function(timestamp) {
+  between(date(timestamp), exam_week_start, exam_week_end)
 }
 ```
 
-## Load data
+# Load data
 
 Expected columns and sample values:
 
@@ -33,17 +35,13 @@ Item | Date | Login Time | Computer | User ID | User Name | Session Minutes
 data <- read_xlsx("data/input.xlsx", skip=6)
 data <- read_xlsx("data/input.xlsx", skip=6, n_max=nrow(data)-5)
 
-# Insert the date column into the time column to form a unified
+# Incorporate the date column into the time column to form a unified
 # timestamp column
 date(data$`Login Time`) <- mdy(str_remove(data$Date, "^\\w+ "))
-
-# Add date back as separate column
-data <- mutate(data, date=date(`Login Time`))
 
 # Select and rename columns of interest
 data <- select(data,
   login_time=`Login Time`,
-  date,
   computer=Computer,
   session_minutes=`Session Minutes`
 )
@@ -58,18 +56,18 @@ data <- filter(data, !str_starts(computer, "PSY|PT|SYS"))
 data <- mutate(data,
   building=case_when(
     str_starts(computer, "OAM"     ) ~ "Music",
-    str_starts(computer, "OA[^M]"  ) ~ "B",
-    str_starts(computer, "PA"      ) ~ "A",
-    str_starts(computer, "PB"      ) ~ "B",
-    str_starts(computer, "PC[124]" ) ~ "D",
-    str_starts(computer, "PC[5678]") ~ "C",
+    str_starts(computer, "OA[^M]"  ) ~ "B (middle 2-story)",
+    str_starts(computer, "PA"      ) ~ "A (north 3-story)",
+    str_starts(computer, "PB"      ) ~ "B (middle 2-story)",
+    str_starts(computer, "PC[124]" ) ~ "D (south 4-story)",
+    str_starts(computer, "PC[5678]") ~ "C (tower 8-story)",
     str_starts(computer, "PFM"     ) ~ "Music",
-    str_starts(computer, "PF[^M]"  ) ~ "A",
+    str_starts(computer, "PF[^M]"  ) ~ "A (north 3-story)",
     str_starts(computer, "PM"      ) ~ "Music",
-    str_starts(computer, "PS2"     ) ~ "C",
+    str_starts(computer, "PS2"     ) ~ "C (tower 8-story)",
     str_starts(computer, "PS3"     ) ~ "SRC",
-    str_starts(computer, "PW"      ) ~ "A",
-    str_starts(computer, "RSV"     ) ~ "B",
+    str_starts(computer, "PW"      ) ~ "A (north 3-story)",
+    str_starts(computer, "RSV"     ) ~ "B (middle 2-story)",
     TRUE ~ NA
   ),
   floor=case_when(
@@ -81,78 +79,117 @@ data <- mutate(data,
   )
 )
 
-# For convenience, create a dataframe that counts numbers of
-# logins/sessions
+# Fix up datatypes
+data <- mutate(data,
+  computer=as.factor(computer),
+  session_minutes=as.integer(session_minutes),
+  building=as.factor(building),
+  floor=as.integer(floor)
+)
+
+# For convenience, create a dataframe that counts numbers of logins
 login_data <- data %>%
-  group_by(date, building) %>%
+  group_by(date=date(login_time), building, floor) %>%
   summarize(num_logins=n())
 ```
 
-## Analysis
+# Analysis
 
-### Average users per day
+## Logins
 
-We're equating users with logins here and below.
+### Average logins per day
 
 ```{r}
+#| code-fold: true
 df <- login_data %>% group_by(date) %>% summarize(num_logins=sum(num_logins))
 round(mean(df$num_logins), 0)
 ```
 
-### Average users per day, by area
+### Average logins per day, by area
 
 ```{r message=FALSE}
+#| code-fold: true
 login_data %>%
-  group_by(building) %>%
-  summarize(`average daily users`=round(mean(num_logins), 0))
+  group_by(Building=building, Floor=floor) %>%
+  summarize(`Average daily logins`=round(mean(num_logins), 0))
 ```
+
+## Duration
 
 ### Average session duration
 
 In minutes.
 
 ```{r}
+#| code-fold: true
 round(mean(data$session_minutes), 0)
 ```
 
-### Exam week: average users per day
+### Average session duration, by area
+
+```{r message=FALSE}
+#| code-fold: true
+data %>%
+  group_by(Building=building, Floor=floor) %>%
+  summarize(`Average session duration (min)`=round(mean(session_minutes), 0))
+```
+
+## Effects of exam week
 
 Comparing usage during exam week and not.
 
+### Average logins per day
+
 ```{r message=FALSE}
+#| code-fold: true
 login_data %>%
   group_by(date) %>%
   summarize(num_logins=sum(num_logins)) %>%
-  group_by(`exam week`=in_exam_week(date)) %>%
-  summarize(`average daily users`=round(mean(num_logins), 0))
+  group_by(`Exam week?`=in_exam_week(date)) %>%
+  summarize(`Average daily logins`=round(mean(num_logins), 0))
 ```
 
-### Exam week: average users per day, by area
+### Average logins per day, by building
 
 ```{r message=FALSE}
+#| code-fold: true
 login_data %>%
-  group_by(`exam week`=in_exam_week(date), building) %>%
-  summarize(`average daily users`=mean(num_logins)) %>%
-  ggplot(aes(x=building, y=`average daily users`, fill=`exam week`)) +
+  group_by(`Exam week?`=in_exam_week(date), Building=building) %>%
+  summarize(`Average daily logins`=mean(num_logins)) %>%
+  ggplot(aes(x=Building, y=`Average daily logins`, fill=`Exam week?`)) +
     geom_bar(stat="identity", position="dodge")
 ```
 
-### Exam week: average session duration
+### Average session duration
 
 ```{r}
+#| code-fold: true
 data %>%
-  group_by(`exam week`=in_exam_week(date)) %>%
-  summarize(`average session duration (min)`=round(mean(session_minutes), 0))
+  group_by(`Exam week?`=in_exam_week(login_time)) %>%
+  summarize(`Average session duration (min)`=round(mean(session_minutes), 0))
 ```
 
-### Computer usage
+### Average session duration, by building
 
-Cybrarian provides the start and end times of each session.  Armed with this data, we can compute how many computers are in **simultaneous** use.  The analysis below groups computers by area, but does not otherwise distinguish computers or sessions.  First, prep the data...
+```{r message=FALSE}
+#| code-fold: true
+data %>%
+  group_by(`Exam week?`=in_exam_week(login_time), Building=building) %>%
+  summarize(`Average session duration (min)`=mean(session_minutes)) %>%
+  ggplot(
+      aes(x=Building, y=`Average session duration (min)`, fill=`Exam week?`)
+    ) +
+    geom_bar(stat="identity", position="dodge")
+```
+
+## Computer usage
+
+Cybrarian provides the start and end times of each session.  Armed with this data, we can compute how many computers are in **simultaneous** use.  The analysis below groups computers by building, but does not otherwise distinguish computers or sessions.  First, prep the data...
 
 ```{r}
 # The loop below takes a looong time, hence the cache file.  While
-# there are more efficient algorithmic approaches, it's surprising
-# that R is so slow...
+# there are more efficient algorithmic approaches, it's surprising how
+# slow R is...
 
 cache_file <- "data/in_use_data.RData"
 
@@ -167,11 +204,15 @@ if (file.exists(cache_file)) {
   latest_mins <- as.integer(max(data$login_time)) %/% 60
   in_use_data <- crossing(
     timestamp=as_datetime((earliest_mins:latest_mins)*60),
-    building=unique(data$building)
+    building=levels(data$building)
   )
   in_use_data$num_in_use <- 0
+  in_use_data <- mutate(in_use_data,
+    building=as.factor(building),
+    num_in_use=as.integer(num_in_use)
+  )
 
-  for (i in rownames(data)) { # For each session
+  for (i in rownames(data)) { # For each login/session
     start <- data[i,]$login_time
     second(start) <- 0
     end <- start + minutes(data[i,]$session_minutes-1)
@@ -185,21 +226,23 @@ if (file.exists(cache_file)) {
 }
 ```
 
-### Computer usage: overall maximum
+### Overall maximum
 
 Again, this is counting computers that are in simultaneous use.
 
 ```{r}
+#| code-fold: true
 in_use_data %>%
-  group_by(building) %>%
-  summarize(`max computers in use`=max(num_in_use))
+  group_by(Building=building) %>%
+  summarize(`Max computers in use`=max(num_in_use))
 ```
 
-### Computer usage: daily maximums
+### Daily maximums, by building
 
 ```{r message=FALSE}
+#| code-fold: true
 in_use_data %>%
-  group_by(building, date=date(timestamp)) %>%
-  summarize(`max computers in use`=max(num_in_use)) %>%
-  ggplot(aes(x=date, y=`max computers in use`, color=building)) + geom_line()
+  group_by(Building=building, Date=date(timestamp)) %>%
+  summarize(`Max computers in use`=max(num_in_use)) %>%
+  ggplot(aes(x=Date, y=`Max computers in use`, color=Building)) + geom_line()
 ```
