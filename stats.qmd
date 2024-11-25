@@ -99,6 +99,12 @@ data <- mutate(data,
 areas <- unique(select(data, building, floor, area)) %>%
   arrange(building, floor)
 
+# Number of computers in each area (inferred from data, not ground
+# truth)
+computers <- unique(select(data, building, floor, area, computer)) %>%
+  group_by(building, floor, area) %>%
+  summarize(num_computers=n())
+
 # For convenience, create a dataframe that counts numbers of logins
 login_data <- data %>%
   group_by(date=date(login_time), building, floor, area) %>%
@@ -144,6 +150,47 @@ round(mean(data$session_minutes), 0)
 data %>%
   group_by(Building=building, Floor=floor) %>%
   summarize(`Average session duration (min)`=round(mean(session_minutes), 0))
+```
+
+## Occupancy
+
+Here we consider the percentage of time the computers in an area are occupied.  An area has an occupancy of 100% if every computer in the area is occupied by a session every minute the Library is open.  Two notes:
+
+- The number of computers in each area is inferred from those mentioned in the Cybrarian input data; this notebook has no independent source of information about numbers of computers.
+
+- For the purpose of calculating percentages, the Library is assumed to be open 12 hours per day.
+
+```{r}
+open_minutes <- 12*60 # half a day
+```
+
+### Average daily occupancy
+
+Over all areas of the Library, as a percentage of theoretical capacity (`r sum(computers$num_computers)` computers total, available `r open_minutes` minutes per day).
+
+```{r message=FALSE}
+#| code-fold: true
+df <- data %>%
+  group_by(date(login_time)) %>%
+  summarize(minutes_used=sum(session_minutes))
+
+round(mean(df$minutes_used)/(sum(computers$num_computers)*open_minutes)*100, 0)
+```
+
+### Average daily occupancy, by area
+
+```{r message=FALSE}
+#| code-fold: true
+data %>%
+  group_by(date(login_time), area) %>%
+  summarize(minutes_used=sum(session_minutes)) %>%
+  group_by(area) %>%
+  summarize(avg_minutes_used=mean(minutes_used)) %>%
+  inner_join(computers, by=join_by(area)) %>%
+  mutate(
+    occupied_pct=round(avg_minutes_used/(num_computers*open_minutes)*100, 0)
+  ) %>%
+  select(Building=building, Floor=floor, `% occupied`=occupied_pct)
 ```
 
 ## Effects of exam week
@@ -228,6 +275,66 @@ data %>%
         y=`Average session duration (min)`,
         fill=`Exam week?`
       )
+    ) +
+    geom_bar(stat="identity", position="dodge")
+```
+
+### Average daily occupancy
+
+Over all areas of the Library, as a percentage of theoretical capacity (`r sum(computers$num_computers)` computers total, available `r open_minutes` minutes per day).
+
+```{r message=FALSE}
+#| code-fold: true
+data %>%
+  group_by(`Exam week?`=in_exam_week(login_time), date(login_time)) %>%
+  summarize(minutes_used=sum(session_minutes)) %>%
+  group_by(`Exam week?`) %>%
+  summarize(
+    `% occupied`=round(
+      mean(minutes_used)/(sum(computers$num_computers)*open_minutes)*100,
+      0
+    )
+  )
+```
+
+### Average daily occupancy, by building and area
+
+```{r message=FALSE}
+#| code-fold: true
+computers_by_building <- computers %>%
+  group_by(building) %>%
+  summarize(num_computers=sum(num_computers))
+
+data %>%
+  group_by(
+    `Exam week?`=in_exam_week(login_time),
+    building,
+    date(login_time)
+  ) %>%
+  summarize(minutes_used=sum(session_minutes)) %>%
+  group_by(`Exam week?`, Building=building) %>%
+  summarize(avg_minutes_used=mean(minutes_used)) %>%
+  inner_join(computers_by_building, by=join_by(Building==building)) %>%
+  mutate(
+    `% occupied`=round(avg_minutes_used/(num_computers*open_minutes)*100, 0)
+  ) %>%
+  ggplot(aes(x=Building, y=`% occupied`, fill=`Exam week?`)) +
+    geom_bar(stat="identity", position="dodge")
+```
+
+```{r message=FALSE}
+#| code-fold: true
+data %>%
+  group_by(`Exam week?`=in_exam_week(login_time), area, date(login_time)) %>%
+  summarize(minutes_used=sum(session_minutes)) %>%
+  group_by(`Exam week?`, `Area (= building + floor)`=area) %>%
+  summarize(avg_minutes_used=mean(minutes_used)) %>%
+  inner_join(computers, by=join_by(`Area (= building + floor)`==area)) %>%
+  mutate(
+    `% occupied`=round(avg_minutes_used/(num_computers*open_minutes)*100, 0)
+  ) %>%
+  ggplot(
+      aes(x=`Area (= building + floor)`, y=`% occupied`, fill=`Exam week?`)
     ) +
     geom_bar(stat="identity", position="dodge")
 ```
