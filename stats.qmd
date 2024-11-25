@@ -100,10 +100,15 @@ areas <- unique(select(data, building, floor, area)) %>%
   arrange(building, floor)
 
 # Number of computers in each area (inferred from data, not ground
-# truth)
+# truth)...
 computers <- unique(select(data, building, floor, area, computer)) %>%
   group_by(building, floor, area) %>%
   summarize(num_computers=n())
+
+# ...and by building
+computers_by_building <- computers %>%
+  group_by(building) %>%
+  summarize(num_computers=sum(num_computers))
 
 # For convenience, create a dataframe that counts numbers of logins
 login_data <- data %>%
@@ -301,10 +306,6 @@ data %>%
 
 ```{r message=FALSE}
 #| code-fold: true
-computers_by_building <- computers %>%
-  group_by(building) %>%
-  summarize(num_computers=sum(num_computers))
-
 data %>%
   group_by(
     `Exam week?`=in_exam_week(login_time),
@@ -385,13 +386,16 @@ if (file.exists(cache_file)) {
 
 ### Overall maximums, by area
 
-Again, this is counting computers that are in simultaneous use.
+Again, this is counting computers that are in simultaneous use.  And the comment under [Occupancy](#occupancy) above applies here as well: the number of computers in each area is inferred from those mentioned in the Cybrarian input data.
 
 ```{r message=FALSE}
 #| code-fold: true
 in_use_data %>%
   group_by(Building=building, Floor=floor) %>%
-  summarize(`Max computers in use`=max(num_in_use))
+  summarize(`Max computers in use`=max(num_in_use)) %>%
+  inner_join(computers, by=join_by(Building==building, Floor==floor)) %>%
+  mutate(`% of total`=round(`Max computers in use`/num_computers*100, 0)) %>%
+  select(Building, Floor, `Max computers in use`, `% of total`)
 ```
 
 ### Daily maximums, by building and area
@@ -401,34 +405,23 @@ in_use_data %>%
 in_use_data %>%
   group_by(timestamp, building) %>%
   summarize(num_in_use=sum(num_in_use)) %>%
-  group_by(Building=building, Date=date(timestamp)) %>%
-  summarize(`Max computers in use`=max(num_in_use)) %>%
-  ggplot(aes(x=Date, y=`Max computers in use`, color=Building)) + geom_line()
+  group_by(building, Date=date(timestamp)) %>%
+  summarize(max_in_use=max(num_in_use)) %>%
+  inner_join(computers_by_building, by=join_by(building)) %>%
+  mutate(`% computers in use`=max_in_use/num_computers*100) %>%
+  ggplot(aes(x=Date, y=`% computers in use`)) +
+    geom_line() +
+    facet_wrap(~building)
 ```
 
 ```{r message=FALSE}
 #| code-fold: true
-
-# Palette generated from https://mokole.com/palette.html
-palette <- c(
-  "#228b22", # forestgreen
-  "#00008b", # darkblue
-  "#ff0000", # red
-  "#ffd700", # gold
-  "#7fff00", # chartreuse
-  "#00ffff", # aqua
-  "#ff00ff", # fuchsia
-  "#1e90ff", # dodgerblue
-  "#ff69b4", # hotpink
-  "#ffe4c4", # bisque
-  "#2f4f4f", # darkslategray
-  "#8b4513"  # saddlebrown
-)
-
 in_use_data %>%
-  group_by(Area=area, Date=date(timestamp)) %>%
-  summarize(`Max computers in use`=max(num_in_use)) %>%
-  ggplot(aes(x=Date, y=`Max computers in use`, color=Area)) +
+  group_by(area, Date=date(timestamp)) %>%
+  summarize(max_in_use=max(num_in_use)) %>%
+  inner_join(computers, by=join_by(area)) %>%
+  mutate(`% computers in use`=max_in_use/num_computers*100) %>%
+  ggplot(aes(x=Date, y=`% computers in use`)) +
     geom_line() +
-    scale_color_manual(values=palette)
+    facet_wrap(~area)
 ```
