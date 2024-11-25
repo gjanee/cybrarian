@@ -65,7 +65,7 @@ data <- mutate(data,
     str_starts(computer, "PF[^M]"  ) ~ "A (north 3-story)",
     str_starts(computer, "PM"      ) ~ "Music",
     str_starts(computer, "PS2"     ) ~ "C (tower 8-story)",
-    str_starts(computer, "PS3"     ) ~ "SRC",
+    str_starts(computer, "PS3"     ) ~ "A (north 3-story)", # Wiki says "SRC"
     str_starts(computer, "PW"      ) ~ "A (north 3-story)",
     str_starts(computer, "RSV"     ) ~ "B (middle 2-story)",
     TRUE ~ NA
@@ -79,17 +79,29 @@ data <- mutate(data,
   )
 )
 
+# For certain plots it will be convenient to be able to refer to a
+# building and floor more compactly as an "area".  Note the reliance
+# on how buildings are named in the above mapping.
+data <- mutate(data,
+  area=paste(str_sub(building, 1, 1), floor, sep="")
+)
+
 # Fix up datatypes
 data <- mutate(data,
   computer=as.factor(computer),
   session_minutes=as.integer(session_minutes),
   building=as.factor(building),
-  floor=as.integer(floor)
+  floor=as.integer(floor),
+  area=as.factor(area)
 )
+
+# Create a dataframe listing the areas, for use in joins
+areas <- unique(select(data, building, floor, area)) %>%
+  arrange(building, floor)
 
 # For convenience, create a dataframe that counts numbers of logins
 login_data <- data %>%
-  group_by(date=date(login_time), building, floor) %>%
+  group_by(date=date(login_time), building, floor, area) %>%
   summarize(num_logins=n())
 ```
 
@@ -149,14 +161,34 @@ login_data %>%
   summarize(`Average daily logins`=round(mean(num_logins), 0))
 ```
 
-### Average logins per day, by building
+### Average logins per day, by building and area
 
 ```{r message=FALSE}
 #| code-fold: true
 login_data %>%
+  group_by(date, building) %>%
+  summarize(num_logins=sum(num_logins)) %>%
   group_by(`Exam week?`=in_exam_week(date), Building=building) %>%
   summarize(`Average daily logins`=mean(num_logins)) %>%
   ggplot(aes(x=Building, y=`Average daily logins`, fill=`Exam week?`)) +
+    geom_bar(stat="identity", position="dodge")
+```
+
+```{r message=FALSE}
+#| code-fold: true
+login_data %>%
+  group_by(
+    `Exam week?`=in_exam_week(date),
+    `Area (= building + floor)`=area
+  ) %>%
+  summarize(`Average daily logins`=mean(num_logins)) %>%
+  ggplot(
+      aes(
+        x=`Area (= building + floor)`,
+        y=`Average daily logins`,
+        fill=`Exam week?`
+      )
+    ) +
     geom_bar(stat="identity", position="dodge")
 ```
 
@@ -169,7 +201,7 @@ data %>%
   summarize(`Average session duration (min)`=round(mean(session_minutes), 0))
 ```
 
-### Average session duration, by building
+### Average session duration, by building and area
 
 ```{r message=FALSE}
 #| code-fold: true
@@ -182,9 +214,27 @@ data %>%
     geom_bar(stat="identity", position="dodge")
 ```
 
-## Computer usage
+```{r message=FALSE}
+#| code-fold: true
+data %>%
+  group_by(
+    `Exam week?`=in_exam_week(login_time),
+    `Area (= building + floor)`=area
+  ) %>%
+  summarize(`Average session duration (min)`=mean(session_minutes)) %>%
+  ggplot(
+      aes(
+        x=`Area (= building + floor)`,
+        y=`Average session duration (min)`,
+        fill=`Exam week?`
+      )
+    ) +
+    geom_bar(stat="identity", position="dodge")
+```
 
-Cybrarian provides the start and end times of each session.  Armed with this data, we can compute how many computers are in **simultaneous** use.  The analysis below groups computers by building, but does not otherwise distinguish computers or sessions.  First, prep the data...
+## Peak usage
+
+Cybrarian provides the start and end times of each session.  Armed with this data, we can compute how many computers are in **simultaneous** use.  The analysis below groups computers by building and floor, but does not otherwise distinguish between computers (i.e., all computers within an area are considered equivalent).  First, prep the data...
 
 ```{r}
 # The loop below takes a looong time, hence the cache file.  While
@@ -197,18 +247,17 @@ if (file.exists(cache_file)) {
   load(cache_file)
 } else {
 
-  # Create a dataframe with a row for each minute and each building.
+  # Create a dataframe with a row for each minute and each area.
   # Subtle point: we are not capturing the decay in usage that extends
   # beyond the minute of the last login time.
   earliest_mins <- as.integer(min(data$login_time)) %/% 60
   latest_mins <- as.integer(max(data$login_time)) %/% 60
   in_use_data <- crossing(
     timestamp=as_datetime((earliest_mins:latest_mins)*60),
-    building=levels(data$building)
+    areas
   )
   in_use_data$num_in_use <- 0
   in_use_data <- mutate(in_use_data,
-    building=as.factor(building),
     num_in_use=as.integer(num_in_use)
   )
 
@@ -217,7 +266,8 @@ if (file.exists(cache_file)) {
     second(start) <- 0
     end <- start + minutes(data[i,]$session_minutes-1)
     rows <- between(in_use_data$timestamp, start, end) &
-      in_use_data$building == data[i,]$building
+      in_use_data$building == data[i,]$building &
+      in_use_data$floor == data[i,]$floor
     in_use_data[rows,"num_in_use"] <- in_use_data[rows,"num_in_use"] + 1
   }
 
@@ -226,23 +276,33 @@ if (file.exists(cache_file)) {
 }
 ```
 
-### Overall maximum
+### Overall maximums, by area
 
 Again, this is counting computers that are in simultaneous use.
-
-```{r}
-#| code-fold: true
-in_use_data %>%
-  group_by(Building=building) %>%
-  summarize(`Max computers in use`=max(num_in_use))
-```
-
-### Daily maximums, by building
 
 ```{r message=FALSE}
 #| code-fold: true
 in_use_data %>%
+  group_by(Building=building, Floor=floor) %>%
+  summarize(`Max computers in use`=max(num_in_use))
+```
+
+### Daily maximums, by building and area
+
+```{r message=FALSE}
+#| code-fold: true
+in_use_data %>%
+  group_by(timestamp, building) %>%
+  summarize(num_in_use=sum(num_in_use)) %>%
   group_by(Building=building, Date=date(timestamp)) %>%
   summarize(`Max computers in use`=max(num_in_use)) %>%
   ggplot(aes(x=Date, y=`Max computers in use`, color=Building)) + geom_line()
+```
+
+```{r message=FALSE}
+#| code-fold: true
+in_use_data %>%
+  group_by(Area=area, Date=date(timestamp)) %>%
+  summarize(`Max computers in use`=max(num_in_use)) %>%
+  ggplot(aes(x=Date, y=`Max computers in use`, color=Area)) + geom_line()
 ```
