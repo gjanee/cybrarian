@@ -301,8 +301,27 @@ in_use_data %>%
 
 ```{r message=FALSE}
 #| code-fold: true
+
+# Palette generated from https://mokole.com/palette.html
+palette <- c(
+  "#228b22", # forestgreen
+  "#00008b", # darkblue
+  "#ff0000", # red
+  "#ffd700", # gold
+  "#7fff00", # chartreuse
+  "#00ffff", # aqua
+  "#ff00ff", # fuchsia
+  "#1e90ff", # dodgerblue
+  "#ff69b4", # hotpink
+  "#ffe4c4", # bisque
+  "#2f4f4f", # darkslategray
+  "#8b4513"  # saddlebrown
+)
+
 in_use_data %>%
   group_by(Area=area, Date=date(timestamp)) %>%
   summarize(`Max computers in use`=max(num_in_use)) %>%
-  ggplot(aes(x=Date, y=`Max computers in use`, color=Area)) + geom_line()
+  ggplot(aes(x=Date, y=`Max computers in use`, color=Area)) +
+    geom_line() +
+    scale_color_manual(values=palette)
 ```
