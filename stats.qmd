@@ -52,7 +52,8 @@ data <- select(data,
 # Remove virtual machines
 data <- filter(data, !str_starts(computer, "PSY|PT|SYS"))
 
-# Map computers to buildings and floors
+# Map computers to buildings and floors; note reliance on name
+# formatting below
 data <- mutate(data,
   building=case_when(
     str_starts(computer, "OAM"     ) ~ "Music",
