@@ -24,7 +24,7 @@ in_exam_week <- function(timestamp) {
 
 # Load data
 
-Expected columns and sample values:
+Expected columns and sample row:
 
 Item | Date | Login Time | Computer | User ID | User Name | Session Minutes
 ---- | ---- | ---------- | -------- | ------- | --------- | ---------------
@@ -52,8 +52,8 @@ data <- select(data,
 # Remove virtual machines
 data <- filter(data, !str_starts(computer, "PSY|PT|SYS"))
 
-# Map computers to buildings and floors; note reliance on name
-# formatting below
+# Map computers to buildings and floors.  N.B.: code farther down
+# relies on how building names are formatted here.
 data <- mutate(data,
   building=case_when(
     str_starts(computer, "OAM"     ) ~ "Music",
@@ -81,8 +81,7 @@ data <- mutate(data,
 )
 
 # For certain plots it will be convenient to be able to refer to a
-# building and floor more compactly as an "area".  Note the reliance
-# on how buildings are named in the above mapping.
+# building and floor more compactly as an "area"
 data <- mutate(data,
   area=paste(str_sub(building, 1, 1), floor, sep="")
 )
@@ -106,7 +105,7 @@ computers <- unique(select(data, building, floor, area, computer)) %>%
   group_by(building, floor, area) %>%
   summarize(num_computers=n())
 
-# ...and by building
+# ...and in each building
 computers_by_building <- computers %>%
   group_by(building) %>%
   summarize(num_computers=sum(num_computers))
